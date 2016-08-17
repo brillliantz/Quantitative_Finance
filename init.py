@@ -39,7 +39,7 @@ def PowerTransDisPlot(ser, method='pow', n=1., ret=False):
     elif method == 'powshrink':
         ser_trans = np.sign(ser) * (np.power(np.abs(ser) + 1, n) - 1)
     else:
-        print 'ERROR! in PowerTransDisPlot()'
+        print 'ERROR! In PowerTransDisPlot()'
     if ret:
         return ser_trans
     else:
@@ -52,12 +52,108 @@ def Splitit(x_full, y_full, percent1, percent2):
     N = len(y_full)
     n1, n2 = int(N * percent1), int(N * percent2)
     in_index, out_index, test_index = y_full.index[:n1], y_full.index[n1: n2], y_full.index[n2:]
-    return (x_full.ix[in_index], y_full.ix[in_index], 
-        x_full.ix[out_index], y_full.ix[out_index], 
+    return (x_full.ix[in_index], y_full.ix[in_index],
+        x_full.ix[out_index], y_full.ix[out_index],
         x_full.ix[test_index], y_full.ix[test_index])
 
 
-def MyRgrs(xi, xo, yi, yo, model=None, align=False):
+def svrRgr(xi, xo, yi, yo, model=None, regressor_kws={}, kernel_kws={}, align=True):
+    '''use yi and yout 's index to align. x is of full length.
+
+    Parameters
+    ----------
+    model : sklearn clf
+
+    Returns
+    -------
+    res : regression result
+
+    '''
+    import functools
+    if align: # use Y as align index
+        xi = xi.ix[yi.index]
+        xo = xo.ix[yo.index]
+    if not xi.ndim > 1: # for univariate regression
+        xi = xi.reshape(-1, 1)
+        xo = xo.reshape(-1, 1)
+    partial_kernel = functools.partial(kernel, **kernel_kws)
+    regressor = svm.SVR(kernel=partial_kernel, **regressor_kws)
+    res = regressor.fit(xi, yi)
+    rsq_in = res.score(xi, yi)
+    print ('rsq_in: %f' % rsq_in)
+    rsq_out = res.score(xo, yo)
+    print ('rsq_out: %f' % rsq_out)
+    return res, rsq_in, rsq_out
+
+from sklearn import linear_model
+
+class myRgr(object):
+    def __init__(self):
+        pass
+    def timeit(func):
+        def timed(*args, **kwargs):
+            ts = time.time()
+            result = func(*args, **kwargs)
+            te = time.time()
+            print '%r %.2f sec' % (func.__name__, te-ts)
+            return result
+        return timed
+    def modelGo(self, regressor, regressor_kws={} ,kernel=None, kernel_kws={}):
+        """
+        initialize regressor (with kernel if any).
+
+        """
+        self.xin = xin
+        self.xout = xout
+        if regressor == 'svr' and callable(kernel):
+            self.kernel = kernel
+            self.partial_kernel = functools.partial(kernel, **kernel_kws)
+            self.regressor = svm.SVR(kernel=self.partial_kernel, **regressor_kws)
+        elif regressor == 'Ridge':
+            self.regressor = linear_model.Ridge(**regressor_kws)
+        elif regressor == 'Lasso':
+            self.regressor = linear_model.Lasso(**regressor_kws)
+        else:
+            raise ValueError('Wrong model!')
+    def dataGo(self, xin, yin, xout, yout, xtest, ytest, align=True):
+        """all arguments are pd.DataFrame or pd.Series type.
+        """
+        self.xin, self.yin = xin, yin
+        self.xout, self.yout = xout, yout
+        self.xtest, self.ytest = xtest, ytest
+        if align:
+            self.xin = self.xin.ix[self.yin.index]
+            self.xout = self.xout.ix[self.yout.index]
+            self.xtest = self.xtest.ix[self.ytest.index]
+        if not self.xin.ndim > 1: # for univariate regression
+            self.xin = self.xin.reshape(-1, 1)
+            self.xout = self.xout.reshape(-1, 1)
+            self.xtest = self.xtest.reshape(-1, 1)
+        # self.half_life = np.log(2) / np.mean(self.partial_kernel(xin, xin)) # for gamma
+    @timeit
+    def fit(self):
+        self.result = self.regressor.fit(self.xin, self.yin)
+    @timeit
+    def predict(self, x_new):
+        return self.result.predict(x_new)
+    @timeit
+    def rsqGo(self):
+        self.rsq_in = self.result.score(self.xin, self.yin)
+        self.rsq_out = self.result.score(self.xout, self.yout)
+        print 'rsq_in: {0:.6f} \nrsq_out: {1:.6f}'.format(self.rsq_in * 100, self.rsq_out * 100)
+    @timeit
+    def test(self):
+        #self._t = tm.time()
+        self.rsq_test = self.result.score(self.xtest, self.ytest)
+        print 'rsq_test: {0:.6f} '.format(self.rsq_test * 100)
+        #print '{0:.4f}s for rsq test.'.format(tm.time() - self._t)
+    @timeit
+    def residualGo(self):
+        self._yin_predict = self.predict(self.xin)
+        self.residual = self._yin_predict - self.yin
+
+
+def MyRgrs(xi, xo, yi, yo, model=None, align=True):
     '''use yi and yout 's index to align. x is of full length.
 
     Parameters
@@ -83,6 +179,7 @@ def MyRgrs(xi, xo, yi, yo, model=None, align=False):
     rsq_out = res.score(xo, yo)
     print ('rsq_out: %f' % rsq_out)
     return res, rsq_in, rsq_out
+
 
 def PropMatrix(df):
     ols_mat = df.apply(lambda col: Myols(col, yin, yout, False), axis=0).T
@@ -127,13 +224,13 @@ def PlotFit(res, xi, xo, yi, yo, n):
     xo = xo.ix[yo.index]
     if type(res) == sm.regression.linear_model.RegressionResultsWrapper:
         xi = sm.add_constant(xi)
-    plt.figure(figsize=(10,8))
+    plt.figure(figsize=(20,8))
     plt.scatter(xi.ix[:, n],
                 yi, c='k', label='data', facecolors='none')
     plt.hold('on')
     plt.scatter(xi.ix[:, n],
                 res.predict(xi), edgecolors='r', label='Linear model', facecolors='none')
-    plt.figure(figsize=(10,8))
+    plt.figure(figsize=(20,8))
     plt.scatter(xo.ix[:, n],
                 yo, c='k', label='data', facecolors='none')
     plt.hold('on')
@@ -173,6 +270,56 @@ def GridContour(x, y, z):
     cbar.add_lines(CS2)
     plt.show()
     return X, Y, Z
+
+def KernelDist(kernel1, kwargs1, kernel2=None, kwargs2=None, resample=200):
+    """
+    kwargs1 and kwargs2 are dictionary.
+
+    """
+    global xin_stdzd
+    a, b = xin_stdzd.ix[::resample], xin_stdzd.ix[::resample]
+    if kernel2:
+        temp1, temp2 = kernel1(a, b, **kwargs1), kernel2(a, b, **kwargs2)
+    else:
+        temp1 = kernel1(a, b, **kwargs1)
+    plt.figure(figsize=(16,8))
+    #ax1 = fig.add_subplot(111)
+    sns.distplot(temp1.ravel(), label='kernel1')
+    if kernel2:
+        sns.distplot(temp2.ravel(), label='kernel2')
+    plt.legend()
+#     return fig
+
+def my_kernel_exp(x, y, gamma=.2, metric='eu', squared=False, w=None, full_output=False):
+    """gamma is auto tuned. The argument gamma means shrink_ratio.
+
+    """
+    if y.shape[1] != x.shape[1]:
+        raise ValueError('x and y shape do not match')
+    dim = x.shape[1]e
+    if w != None:
+        x = x * w
+        y = y * w
+    if metric=='eu':
+        f = pairwise.euclidean_distances
+        dim = np.sqrt(dim)
+    elif metric=='mh':
+        f = pairwise.manhattan_distances
+    else:
+        raise ValueError('WrongMetricError')
+    dis = f(x, y)
+    dis *= 1./dim # normalize
+    if full_output:
+        print 'gamma = {0:.4f}     dim = {1:.4f}     squared = {2}'.format(gamma, dim, squared)
+    if squared:
+        dis += 1.
+        dis = dis**2
+        dis -= 1.
+        # choose exp(-gamma*x^2) or exp(-gamma*x)
+#         print np.log(2) / np.median(dis)
+    dis *= -gamma
+    np.exp(dis, dis)
+    return dis
 
 pic = pd.read_pickle('/home/bingnan/ecworkspace/HFT1/sample.pic')
 
