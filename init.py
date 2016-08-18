@@ -14,7 +14,7 @@ from sklearn import preprocessing
 from scipy.spatial import distance
 
 import functools
-import time as tm
+import time
 
 
 def Corr2D(x, y):
@@ -57,35 +57,72 @@ def Splitit(x_full, y_full, percent1, percent2):
         x_full.ix[test_index], y_full.ix[test_index])
 
 
-def svrRgr(xi, xo, yi, yo, model=None, regressor_kws={}, kernel_kws={}, align=True):
-    '''use yi and yout 's index to align. x is of full length.
+# def svrRgr(xi, xo, yi, yo, model=None, regressor_kws={}, kernel_kws={}, align=True):
+#     '''use yi and yout 's index to align. x is of full length.
 
-    Parameters
-    ----------
-    model : sklearn clf
+#     Parameters
+#     ----------
+#     model : sklearn clf
 
-    Returns
-    -------
-    res : regression result
+#     Returns
+#     -------
+#     res : regression result
 
-    '''
-    import functools
-    if align: # use Y as align index
-        xi = xi.ix[yi.index]
-        xo = xo.ix[yo.index]
-    if not xi.ndim > 1: # for univariate regression
-        xi = xi.reshape(-1, 1)
-        xo = xo.reshape(-1, 1)
-    partial_kernel = functools.partial(kernel, **kernel_kws)
-    regressor = svm.SVR(kernel=partial_kernel, **regressor_kws)
-    res = regressor.fit(xi, yi)
-    rsq_in = res.score(xi, yi)
-    print ('rsq_in: %f' % rsq_in)
-    rsq_out = res.score(xo, yo)
-    print ('rsq_out: %f' % rsq_out)
-    return res, rsq_in, rsq_out
+#     '''
+#     import functools
+#     if align: # use Y as align index
+#         xi = xi.ix[yi.index]
+#         xo = xo.ix[yo.index]
+#     if not xi.ndim > 1: # for univariate regression
+#         xi = xi.reshape(-1, 1)
+#         xo = xo.reshape(-1, 1)
+#     partial_kernel = functools.partial(kernel, **kernel_kws)
+#     regressor = svm.SVR(kernel=partial_kernel, **regressor_kws)
+#     res = regressor.fit(xi, yi)
+#     rsq_in = res.score(xi, yi)
+#     print ('rsq_in: %f' % rsq_in)
+#     rsq_out = res.score(xo, yo)
+#     print ('rsq_out: %f' % rsq_out)
+#     return res, rsq_in, rsq_out
 
 from sklearn import linear_model
+
+def my_kernel_exp(x, y, gamma=.2, metric='eu', squared=False, w=None, full_output=False):
+    """gamma is auto tuned. The argument gamma means shrink_ratio.
+    
+    """
+    if y.shape[1] != x.shape[1]:
+        raise ValueError('x and y shape do not match')
+    dim = x.shape[1]
+    if w != None:
+        x = x * w
+        y = y * w
+    if metric=='eu':
+        f = pairwise.euclidean_distances
+        dim = np.sqrt(dim)
+    elif metric=='mh':
+        f = pairwise.manhattan_distances
+    else:
+        raise ValueError('WrongMetricError')
+    dis = f(x, y)
+    dis *= 1./dim # normalize
+    if full_output:
+        print 'gamma = {0:.4f}     dim = {1:.4f}     squared = {2}'.format(gamma, dim, squared)
+    if squared: # choose exp(-gamma*x^2) or exp(-gamma*x)
+        dis = dis**2
+    dis *= -gamma
+    np.exp(dis, dis)
+    return dis
+
+def rsquare(ytrue, yhat=None, residual=None): # TODO get out of this class, cz u don't need 'self' argument
+    if yhat is not None:
+        print 'using yhat'
+        return 1. - ((yhat - ytrue)**2).mean() / ytrue.var(ddof=0)
+    elif residual is not None:
+        print 'using residual'
+        return 1. - (residual**2).mean() / ytrue.var(ddof=0)
+    else:
+        raise ValueError('When calculating Rsquare, you must input yhat or residual!')
 
 class myRgr(object):
     def __init__(self):
@@ -114,6 +151,8 @@ class myRgr(object):
             self.regressor = linear_model.Ridge(**regressor_kws)
         elif regressor == 'Lasso':
             self.regressor = linear_model.Lasso(**regressor_kws)
+        elif regressor == 'builtin':
+            self.regressor = svm.SVR(kernel=kernel, **regressor_kws)
         else:
             raise ValueError('Wrong model!')
     def dataGo(self, xin, yin, xout, yout, xtest, ytest, align=True):
@@ -132,13 +171,6 @@ class myRgr(object):
             self.xout = self.xout.reshape(-1, 1)
             self.xtest = self.xtest.reshape(-1, 1)
         # self.half_life = np.log(2) / np.mean(self.partial_kernel(xin, xin)) # for gamma
-    def _rsquare(self, ytrue, yhat=None, residual=None): # TODO get out of this class, cz u don't need 'self' argument
-        if yhat is not None:
-            return 1. - ((yhat - ytrue)**2).mean() / ytrue.var(ddof=0)
-        elif residual is not None:
-            return 1. - (residual**2).mean() / ytrue.var(ddof=0)
-        else:
-            raise ValueError('When calculating Rsquare, you must input yhat or residual!')
     @_timeit
     def fit(self):
         self.result = self.regressor.fit(self.xin, self.yin)
@@ -149,51 +181,65 @@ class myRgr(object):
     def residualGo(self):
         self._yin_predict = self.predict(self.xin)
         self._yout_predict = self.predict(self.xout)
-        self.rzdu_in = self._yin_predict - self.yin
-        self.rzdu_out = self._yout_predict - self.yout
+        self.rzdu_in = self.yin - self._yin_predict
+        self.rzdu_out = self.yout - self._yout_predict
     @_timeit
     def rsqGo(self):
         if self.rzdu_in is None or self.rzdu_out is None:
             self.residualGo()
-        self.rsq_in = self._rsquare(self.yin, residual=self.rzdu_in)
-        self.rsq_out = self._rsquare(self.yout, residual=self.rzdu_out)
-        print '==================rsq_in: {0:.6f}  rsq_out: {1:.6f}'.format(
+        self.rsq_in = rsquare(self.yin, residual=self.rzdu_in)
+        self.rsq_out = rsquare(self.yout, residual=self.rzdu_out)
+        print '\t\t\t\t\t  ---rsq_in: {0:.6f}\n\t\t\t\t\t ---rsq_out: {1:.6f}'.format(
             self.rsq_in * 100, self.rsq_out * 100)
     @_timeit
     def test(self):
         #self._t = tm.time()
         self.rsq_test = self.result.score(self.xtest, self.ytest)
-        print '==================rsq_test: {0:.6f} '.format(self.rsq_test * 100)
+        print '\t\t\t\t\t---rsq_test: {0:.6f} '.format(self.rsq_test * 100)
         #print '{0:.4f}s for rsq test.'.format(tm.time() - self._t)
+    def plotFit(self, n):
+        plt.figure(figsize=(20,8))
+        plt.scatter(self.xin.ix[:, n],
+                    self.yin, c='k', facecolors='none', label='yin_true')
+        plt.hold('on')
+        plt.scatter(self.xin.ix[:, n],
+                    self._yin_predict, edgecolors='r', label='yin_predict', facecolors='none')
+        plt.legend()
+        plt.figure(figsize=(20,8))
+        plt.scatter(self.xout.ix[:, n],
+                    self.yout, c='k', facecolors='none', label='yout_true')
+        plt.hold('on')
+        plt.scatter(self.xout.ix[:, n],
+                    self._yout_predict, edgecolors='r', label='yout_predict', facecolors='none')
+        plt.legend()
 
 
+# def MyRgrs(xi, xo, yi, yo, model=None, align=True):
+#     '''use yi and yout 's index to align. x is of full length.
 
-def MyRgrs(xi, xo, yi, yo, model=None, align=True):
-    '''use yi and yout 's index to align. x is of full length.
+#     Parameters
+#     ----------
+#     model : sklearn clf
 
-    Parameters
-    ----------
-    model : sklearn clf
+#     Returns
+#     -------
+#     res : regression result
 
-    Returns
-    -------
-    res : regression result
-
-    '''
-    if align:
-        xi = xi.ix[yi.index]
-        xo = xo.ix[yo.index]
-    if not xi.ndim > 1:
-        xi = xi.reshape(-1, 1)
-        xo = xo.reshape(-1, 1)
-    # if norm:
-    #     xi = preprocessing.normalize(xi, norm='l2')
-    res = model.fit(xi, yi)
-    rsq_in = res.score(xi, yi)
-    print ('rsq_in: %f' % rsq_in)
-    rsq_out = res.score(xo, yo)
-    print ('rsq_out: %f' % rsq_out)
-    return res, rsq_in, rsq_out
+#     '''
+#     if align:
+#         xi = xi.ix[yi.index]
+#         xo = xo.ix[yo.index]
+#     if not xi.ndim > 1:
+#         xi = xi.reshape(-1, 1)
+#         xo = xo.reshape(-1, 1)
+#     # if norm:
+#     #     xi = preprocessing.normalize(xi, norm='l2')
+#     res = model.fit(xi, yi)
+#     rsq_in = res.score(xi, yi)
+#     print ('rsq_in: %f' % rsq_in)
+#     rsq_out = res.score(xo, yo)
+#     print ('rsq_out: %f' % rsq_out)
+#     return res, rsq_in, rsq_out
 
 
 def PropMatrix(df):
@@ -304,37 +350,6 @@ def KernelDist(kernel1, kwargs1, kernel2=None, kwargs2=None, resample=200):
         sns.distplot(temp2.ravel(), label='kernel2')
     plt.legend()
 #     return fig
-
-def my_kernel_exp(x, y, gamma=.2, metric='eu', squared=False, w=None, full_output=False):
-    """gamma is auto tuned. The argument gamma means shrink_ratio.
-
-    """
-    if y.shape[1] != x.shape[1]:
-        raise ValueError('x and y shape do not match')
-    dim = x.shape[1]e
-    if w != None:
-        x = x * w
-        y = y * w
-    if metric=='eu':
-        f = pairwise.euclidean_distances
-        dim = np.sqrt(dim)
-    elif metric=='mh':
-        f = pairwise.manhattan_distances
-    else:
-        raise ValueError('WrongMetricError')
-    dis = f(x, y)
-    dis *= 1./dim # normalize
-    if full_output:
-        print 'gamma = {0:.4f}     dim = {1:.4f}     squared = {2}'.format(gamma, dim, squared)
-    if squared:
-        dis += 1.
-        dis = dis**2
-        dis -= 1.
-        # choose exp(-gamma*x^2) or exp(-gamma*x)
-#         print np.log(2) / np.median(dis)
-    dis *= -gamma
-    np.exp(dis, dis)
-    return dis
 
 pic = pd.read_pickle('/home/bingnan/ecworkspace/HFT1/sample.pic')
 
