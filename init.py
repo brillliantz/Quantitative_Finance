@@ -87,31 +87,39 @@ def Splitit(x_full, y_full, percent1, percent2):
 
 from sklearn import linear_model
 
-def my_kernel_exp(x, y, gamma=.2, metric='eu', squared=False, w=None, full_output=False):
+def my_kernel_rquad(dis, c):
+    return  1. * c / (dis + c)
+
+def my_kernel_exp(dis, mean_dis=0.1):
     """gamma is auto tuned. The argument gamma means shrink_ratio.
     
     """
-    if y.shape[1] != x.shape[1]:
-        raise ValueError('x and y shape do not match')
-    dim = x.shape[1]
-    if w != None:
-        x = x * w
-        y = y * w
-    if metric=='eu':
-        f = pairwise.euclidean_distances
-        dim = np.sqrt(dim)
-    elif metric=='mh':
-        f = pairwise.manhattan_distances
-    else:
-        raise ValueError('WrongMetricError')
-    dis = f(x, y)
-    dis *= 1./dim # normalize
-    if full_output:
-        print 'gamma = {0:.4f}     dim = {1:.4f}     squared = {2}'.format(gamma, dim, squared)
-    if squared: # choose exp(-gamma*x^2) or exp(-gamma*x)
-        dis = dis**2
+    # if full_output:
+    #     print 'gamma = {0:.4f}     dim = {1:.4f}     squared = {2}'.format(gamma, dim, squared)
+    gamma = 
     dis *= -gamma
     np.exp(dis, dis)
+    return dis
+
+def my_distance(x, y, metric='eu', squared=False, w=None):
+    """only calculate pairwise distance between matrix x and y.
+    
+    """
+    dim = x.shape[1]
+    if w is not None:
+        x = x * w
+        y = y * w
+    if metric == 'eu':
+        f = pairwise.euclidean_distances
+        dim = np.sqrt(dim)
+    elif metric == 'mh':
+        f = pairwise.manhattan_distances
+    else:
+        raise ValueError('Wrong Metric !')
+    dis = f(x, y)
+    dis *= 1. / dim # normalize
+    if squared: # choose exp(-gamma*x^2) or exp(-gamma*x)
+        dis = dis**2
     return dis
 
 def rsquare(ytrue, yhat=None, residual=None): # TODO get out of this class, cz u don't need 'self' argument
@@ -143,10 +151,18 @@ class myRgr(object):
         """
         self.xin = xin
         self.xout = xout
+        
         if regressor == 'svr' and callable(kernel):
+            self._kernel_kws = kernel_kws
+            self._regressor_kws = regressor_kws
+
             self.kernel = kernel
-            self.partial_kernel = functools.partial(kernel, **kernel_kws)
-            self.regressor = svm.SVR(kernel=self.partial_kernel, **regressor_kws)
+            def partial_kernel(x, y):
+                return self.kernel(my_distance(x, y, **self._dis_kws), **self._kernel_kws)
+            self.partial_kernel = partial_kernel
+
+            self.regressor = svm.SVR(kernel=self.partial_kernel, **self._regressor_kws)
+        
         elif regressor == 'Ridge':
             self.regressor = linear_model.Ridge(**regressor_kws)
         elif regressor == 'Lasso':
@@ -155,34 +171,50 @@ class myRgr(object):
             self.regressor = svm.SVR(kernel=kernel, **regressor_kws)
         else:
             raise ValueError('Wrong model!')
-    def dataGo(self, xin, yin, xout, yout, xtest, ytest, align=True):
+    def dataGo(self, xin, yin, xout, yout, xtest, ytest, 
+                align=True, index=None, cols=None, dis_kws={}):
         """all arguments are pd.DataFrame or pd.Series type.
 
         """
         self.xin, self.yin = xin, yin
         self.xout, self.yout = xout, yout
         self.xtest, self.ytest = xtest, ytest
+        
+        if cols is not None:
+            self.xin, self.xout, self.xtest = (self.yin.ix[:, cols], 
+                                                self.xout.ix[:, cols], 
+                                                self.xtest.ix[:, cols])
+        if index is not None:
+            pass
+        
         if align:
             self.xin = self.xin.ix[self.yin.index]
             self.xout = self.xout.ix[self.yout.index]
             self.xtest = self.xtest.ix[self.ytest.index]
+        
         if not self.xin.ndim > 1: # for univariate regression
             self.xin = self.xin.reshape(-1, 1)
             self.xout = self.xout.reshape(-1, 1)
             self.xtest = self.xtest.reshape(-1, 1)
-        # self.half_life = np.log(2) / np.mean(self.partial_kernel(xin, xin)) # for gamma
+        
+        self._dis_kws = dis_kws
+        self.mean_dis = np.mean(my_distance(self.xin, self.xin, **self._dis_kws)) # for gamma
+    
     @_timeit
     def fit(self):
         self.result = self.regressor.fit(self.xin, self.yin)
+    
     @_timeit
     def predict(self, x_new):
         return self.result.predict(x_new)
+    
     @_timeit
     def residualGo(self):
         self._yin_predict = self.predict(self.xin)
         self._yout_predict = self.predict(self.xout)
         self.rzdu_in = self.yin - self._yin_predict
         self.rzdu_out = self.yout - self._yout_predict
+    
     @_timeit
     def rsqGo(self):
         if self.rzdu_in is None or self.rzdu_out is None:
@@ -190,13 +222,35 @@ class myRgr(object):
         self.rsq_in = rsquare(self.yin, residual=self.rzdu_in)
         self.rsq_out = rsquare(self.yout, residual=self.rzdu_out)
         print '\t\t\t\t\t  ---rsq_in: {0:.6f}\n\t\t\t\t\t ---rsq_out: {1:.6f}'.format(
-            self.rsq_in * 100, self.rsq_out * 100)
+            self.rsq_in, self.rsq_out)
+    
     @_timeit
     def test(self):
         #self._t = tm.time()
         self.rsq_test = self.result.score(self.xtest, self.ytest)
-        print '\t\t\t\t\t---rsq_test: {0:.6f} '.format(self.rsq_test * 100)
+        print '\t\t\t\t\t---rsq_test: {0:.6f} '.format(self.rsq_test)
         #print '{0:.4f}s for rsq test.'.format(tm.time() - self._t)
+    
+    """wGo and decision_func are only for linear SVR"""
+    def wGo(self):
+        self.dual_coef = np.zeros_like(self.yin)
+        count = 0
+        dual_coef_only_sv = self.result.dual_coef_.ravel()
+        for i in range(len(self.yin)):
+            if i in self.result.support_:
+                self.dual_coef[i] = dual_coef_only_sv[count]
+                count += 1
+        self.w = np.dot(self.dual_coef, self.xin)
+    
+    def decision_func(self):
+        try:
+            self.w + 1
+        except:
+            self.wGo()
+        def wrapper(x):
+            return np.dot(x, self.w) + self.result.intercept_
+        return wrapper
+    
     def plotFit(self, n):
         plt.figure(figsize=(20,8))
         plt.scatter(self.xin.ix[:, n],
@@ -212,6 +266,7 @@ class myRgr(object):
         plt.scatter(self.xout.ix[:, n],
                     self._yout_predict, edgecolors='r', label='yout_predict', facecolors='none')
         plt.legend()
+
 
 
 # def MyRgrs(xi, xo, yi, yo, model=None, align=True):
