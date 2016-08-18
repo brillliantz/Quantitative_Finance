@@ -89,8 +89,9 @@ from sklearn import linear_model
 
 class myRgr(object):
     def __init__(self):
-        pass
-    def timeit(func):
+        self.rzdu_in = None
+        self.rzdu_out = None
+    def _timeit(func):
         def timed(*args, **kwargs):
             ts = time.time()
             result = func(*args, **kwargs)
@@ -117,6 +118,7 @@ class myRgr(object):
             raise ValueError('Wrong model!')
     def dataGo(self, xin, yin, xout, yout, xtest, ytest, align=True):
         """all arguments are pd.DataFrame or pd.Series type.
+
         """
         self.xin, self.yin = xin, yin
         self.xout, self.yout = xout, yout
@@ -130,27 +132,40 @@ class myRgr(object):
             self.xout = self.xout.reshape(-1, 1)
             self.xtest = self.xtest.reshape(-1, 1)
         # self.half_life = np.log(2) / np.mean(self.partial_kernel(xin, xin)) # for gamma
-    @timeit
+    def _rsquare(self, ytrue, yhat=None, residual=None): # TODO get out of this class, cz u don't need 'self' argument
+        if yhat is not None:
+            return 1. - ((yhat - ytrue)**2).mean() / ytrue.var(ddof=0)
+        elif residual is not None:
+            return 1. - (residual**2).mean() / ytrue.var(ddof=0)
+        else:
+            raise ValueError('When calculating Rsquare, you must input yhat or residual!')
+    @_timeit
     def fit(self):
         self.result = self.regressor.fit(self.xin, self.yin)
-    @timeit
+    @_timeit
     def predict(self, x_new):
         return self.result.predict(x_new)
-    @timeit
+    @_timeit
+    def residualGo(self):
+        self._yin_predict = self.predict(self.xin)
+        self._yout_predict = self.predict(self.xout)
+        self.rzdu_in = self._yin_predict - self.yin
+        self.rzdu_out = self._yout_predict - self.yout
+    @_timeit
     def rsqGo(self):
-        self.rsq_in = self.result.score(self.xin, self.yin)
-        self.rsq_out = self.result.score(self.xout, self.yout)
-        print 'rsq_in: {0:.6f} \nrsq_out: {1:.6f}'.format(self.rsq_in * 100, self.rsq_out * 100)
-    @timeit
+        if self.rzdu_in is None or self.rzdu_out is None:
+            self.residualGo()
+        self.rsq_in = self._rsquare(self.yin, residual=self.rzdu_in)
+        self.rsq_out = self._rsquare(self.yout, residual=self.rzdu_out)
+        print '==================rsq_in: {0:.6f}  rsq_out: {1:.6f}'.format(
+            self.rsq_in * 100, self.rsq_out * 100)
+    @_timeit
     def test(self):
         #self._t = tm.time()
         self.rsq_test = self.result.score(self.xtest, self.ytest)
-        print 'rsq_test: {0:.6f} '.format(self.rsq_test * 100)
+        print '==================rsq_test: {0:.6f} '.format(self.rsq_test * 100)
         #print '{0:.4f}s for rsq test.'.format(tm.time() - self._t)
-    @timeit
-    def residualGo(self):
-        self._yin_predict = self.predict(self.xin)
-        self.residual = self._yin_predict - self.yin
+
 
 
 def MyRgrs(xi, xo, yi, yo, model=None, align=True):
