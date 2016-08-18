@@ -57,35 +57,6 @@ def Splitit(x_full, y_full, percent1, percent2):
         x_full.ix[test_index], y_full.ix[test_index])
 
 
-# def svrRgr(xi, xo, yi, yo, model=None, regressor_kws={}, kernel_kws={}, align=True):
-#     '''use yi and yout 's index to align. x is of full length.
-
-#     Parameters
-#     ----------
-#     model : sklearn clf
-
-#     Returns
-#     -------
-#     res : regression result
-
-#     '''
-#     import functools
-#     if align: # use Y as align index
-#         xi = xi.ix[yi.index]
-#         xo = xo.ix[yo.index]
-#     if not xi.ndim > 1: # for univariate regression
-#         xi = xi.reshape(-1, 1)
-#         xo = xo.reshape(-1, 1)
-#     partial_kernel = functools.partial(kernel, **kernel_kws)
-#     regressor = svm.SVR(kernel=partial_kernel, **regressor_kws)
-#     res = regressor.fit(xi, yi)
-#     rsq_in = res.score(xi, yi)
-#     print ('rsq_in: %f' % rsq_in)
-#     rsq_out = res.score(xo, yo)
-#     print ('rsq_out: %f' % rsq_out)
-#     return res, rsq_in, rsq_out
-
-from sklearn import linear_model
 
 def my_kernel_rquad(dis, c):
     return  1. * c / (dis + c)
@@ -132,11 +103,7 @@ def rsquare(ytrue, yhat=None, residual=None): # TODO get out of this class, cz u
     else:
         raise ValueError('When calculating Rsquare, you must input yhat or residual!')
 
-class myRgr(object):
-    def __init__(self):
-        self.rzdu_in = None
-        self.rzdu_out = None
-    def _timeit(func):
+def _timeit(func):
         def timed(*args, **kwargs):
             ts = time.time()
             result = func(*args, **kwargs)
@@ -144,35 +111,18 @@ class myRgr(object):
             print '%r %.2f sec' % (func.__name__, te-ts)
             return result
         return timed
-    def modelGo(self, regressor, regressor_kws={} ,kernel=None, kernel_kws={}):
-        """
-        initialize regressor (with kernel if any).
 
-        """
-        self.xin = xin
-        self.xout = xout
-        
-        if regressor == 'svr' and callable(kernel):
-            self._kernel_kws = kernel_kws
-            self._regressor_kws = regressor_kws
-
-            self.kernel = kernel
-            def partial_kernel(x, y):
-                return self.kernel(my_distance(x, y, **self._dis_kws), **self._kernel_kws)
-            self.partial_kernel = partial_kernel
-
-            self.regressor = svm.SVR(kernel=self.partial_kernel, **self._regressor_kws)
-        
-        elif regressor == 'Ridge':
-            self.regressor = linear_model.Ridge(**regressor_kws)
-        elif regressor == 'Lasso':
-            self.regressor = linear_model.Lasso(**regressor_kws)
-        elif regressor == 'builtin':
-            self.regressor = svm.SVR(kernel=kernel, **regressor_kws)
-        else:
-            raise ValueError('Wrong model!')
+class myRgr(object):
+    def __init__(self):
+        """Some marker"""
+        self.rzdu_in = None
+        self.rzdu_out = None
+        self.half_life = None
+        self._dataGo_ready = False
+        self._disPrep_ready = False
+    
     def dataGo(self, xin, yin, xout, yout, xtest, ytest, 
-                align=True, index=None, cols=None, dis_kws={}):
+                align=True, index=None, cols=None):
         """all arguments are pd.DataFrame or pd.Series type.
 
         """
@@ -197,8 +147,74 @@ class myRgr(object):
             self.xout = self.xout.reshape(-1, 1)
             self.xtest = self.xtest.reshape(-1, 1)
         
+        self._dataGo_ready = True
+
+    def disPrep(self, dis_func, **dis_kws,):
+        """Only for self-defined kernel SVR
+
+        Parameters
+        ----------
+        dis_func: its arguments must be of the form:
+                    (x, y, **kwargs)
+
+        """
+
+        if not self._dataGo_ready:
+            raise AssertionError('func. dataGo should run before func. prepare !')
+
+        #TODO
+        """pre-compute distance between in-in and in-out for performance consideration"""
+        self.dis_func, self.dis_kws = dis_func, dis_kws
+        self._dis_in_in = self.dis_func(self.xin, self.xin, **self.dis_kws)
+        self._dis_out_in = self.dis_func(self.xout, self.xin, **self.dis_kws)
         self._dis_kws = dis_kws
-        self.mean_dis = np.mean(my_distance(self.xin, self.xin, **self._dis_kws)) # for gamma
+        self.median_dis = np.mean(my_distance(self.xin, self.xin, **self._dis_kws)) # for gamma
+        self.half_life = np.log(2) / self.median_dis
+
+        self._disPrep_ready = True
+    
+    def kernelGo(self, kernel_func, **kernel_kws):
+        """Initialize kernel and its kwargs, then define 
+        partial_kernel (to pass to SVR regressor)
+
+        Parameters
+        ----------
+        kernel_func: its arguments must be of the form:
+                    (x, y, **kwargs)
+
+        """
+        #TODO
+        self.kernel, self.kernel_kws = kernel_func, kernel_kws
+        if callable(self.kernel):
+            def final_kernel(x, y):
+                if x is self.xin and y is self.xin:
+                    dis = self._dis_in_in
+                elif x is self.xout and y is self.xin:
+                    dis = self._dis_out_in
+                else:
+                    dis = self.dis_func(x, y, **self.dis_kws)
+                return self.kernel_func(dis, **self.kernel_kws)
+            self.partial_kernel = final_kernel
+        elif isinstance(self.kernel, str):
+            self.partial_kernel = self.kernel
+        else:
+            raise ValueError('Wrong kernel passed !')
+    
+    def regressorGo(self, regressor, **regressor_kws):
+        """
+        initialize regressor (with kernel if any).
+
+        """
+        # if not self._disPrep_ready:
+        #     raise AssertionError('func. regressorGo should run before func. disPrep !')
+        if regressor == 'svr':
+            self.regressor = svm.SVR(kernel=self.partial_kernel, **regressor_kws)
+        elif regressor == 'Ridge':
+            self.regressor = linear_model.Ridge(**regressor_kws)
+        elif regressor == 'Lasso':
+            self.regressor = linear_model.Lasso(**regressor_kws)
+        else:
+            raise ValueError('input regressor not recognized !')
     
     @_timeit
     def fit(self):
@@ -217,8 +233,10 @@ class myRgr(object):
     
     @_timeit
     def rsqGo(self):
-        if self.rzdu_in is None or self.rzdu_out is None:
-            self.residualGo()
+        """Calculate insample and outsample rsquare"""
+        # if self.rzdu_in is None or self.rzdu_out is None:
+        #     self.residualGo()
+        self.residualGo()
         self.rsq_in = rsquare(self.yin, residual=self.rzdu_in)
         self.rsq_out = rsquare(self.yout, residual=self.rzdu_out)
         print '\t\t\t\t\t  ---rsq_in: {0:.6f}\n\t\t\t\t\t ---rsq_out: {1:.6f}'.format(
@@ -226,12 +244,12 @@ class myRgr(object):
     
     @_timeit
     def test(self):
-        #self._t = tm.time()
         self.rsq_test = self.result.score(self.xtest, self.ytest)
         print '\t\t\t\t\t---rsq_test: {0:.6f} '.format(self.rsq_test)
-        #print '{0:.4f}s for rsq test.'.format(tm.time() - self._t)
     
-    """wGo and decision_func are only for linear SVR"""
+    """
+    ----- wGo and decision_func are only for linear SVR ------
+
     def wGo(self):
         self.dual_coef = np.zeros_like(self.yin)
         count = 0
@@ -250,21 +268,24 @@ class myRgr(object):
         def wrapper(x):
             return np.dot(x, self.w) + self.result.intercept_
         return wrapper
-    
+
+    """
+
     def plotFit(self, n):
+        """Plot ypre to x_n and yture to x_n, in-and-out sample"""
         plt.figure(figsize=(20,8))
-        plt.scatter(self.xin.ix[:, n],
-                    self.yin, c='k', facecolors='none', label='yin_true')
+        plt.scatter(self.xin.ix[:, n], self.yin, 
+            edgecolors='k', facecolors='none', label='yin_true')
         plt.hold('on')
-        plt.scatter(self.xin.ix[:, n],
-                    self._yin_predict, edgecolors='r', label='yin_predict', facecolors='none')
+        plt.scatter(self.xin.ix[:, n], self._yin_predict, 
+            edgecolors='r', facecolors='none', label='yin_predict')
         plt.legend()
         plt.figure(figsize=(20,8))
-        plt.scatter(self.xout.ix[:, n],
-                    self.yout, c='k', facecolors='none', label='yout_true')
+        plt.scatter(self.xout.ix[:, n], self.yout, 
+            edgecolors='k', facecolors='none', label='yout_true')
         plt.hold('on')
-        plt.scatter(self.xout.ix[:, n],
-                    self._yout_predict, edgecolors='r', label='yout_predict', facecolors='none')
+        plt.scatter(self.xout.ix[:, n], self._yout_predict, 
+            edgecolors='r', label='yout_predict', facecolors='none')
         plt.legend()
 
 
