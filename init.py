@@ -56,18 +56,34 @@ def Splitit(x_full, y_full, percent1, percent2):
         x_full.ix[out_index], y_full.ix[out_index],
         x_full.ix[test_index], y_full.ix[test_index])
 
-
+def dict2kwargs(myinput):
+    if isinstance(myinput, dict):
+        res = ''
+        for key, item in myinput.iteritems():
+            res = res + key + '=' + str(item) + ', '
+        print res
+    elif isinstance(myinput, str):
+        kwargs = {}
+        arguments = myinput.split(', ')
+        for argu in arguments:
+            try:
+                key, item = argu.split('=')
+                kwargs[key] = item
+            except:
+                raise ValueError('you can only input keyword parameters!')
+        print kwargs
+    else:
+        raise ValueError('wrong input!')
 
 def my_kernel_rquad(dis, c):
     return  1. * c / (dis + c)
 
-def my_kernel_exp(dis, mean_dis=0.1):
+def my_kernel_exp(dis, gamma=.1):
     """gamma is auto tuned. The argument gamma means shrink_ratio.
     
     """
     # if full_output:
     #     print 'gamma = {0:.4f}     dim = {1:.4f}     squared = {2}'.format(gamma, dim, squared)
-    gamma = 
     dis *= -gamma
     np.exp(dis, dis)
     return dis
@@ -149,7 +165,7 @@ class myRgr(object):
         
         self._dataGo_ready = True
 
-    def disPrep(self, dis_func, **dis_kws,):
+    def disPrep(self, dis_func, **dis_kws):
         """Only for self-defined kernel SVR
 
         Parameters
@@ -168,11 +184,12 @@ class myRgr(object):
         self._dis_in_in = self.dis_func(self.xin, self.xin, **self.dis_kws)
         self._dis_out_in = self.dis_func(self.xout, self.xin, **self.dis_kws)
         self._dis_kws = dis_kws
-        self.median_dis = np.mean(my_distance(self.xin, self.xin, **self._dis_kws)) # for gamma
+        self.median_dis = np.median(my_distance(self.xin, self.xin, **self._dis_kws)) # for gamma
         self.half_life = np.log(2) / self.median_dis
 
         self._disPrep_ready = True
     
+    # def exp_kernel(self, )
     def kernelGo(self, kernel_func, **kernel_kws):
         """Initialize kernel and its kwargs, then define 
         partial_kernel (to pass to SVR regressor)
@@ -186,15 +203,29 @@ class myRgr(object):
         #TODO
         self.kernel, self.kernel_kws = kernel_func, kernel_kws
         if callable(self.kernel):
-            def final_kernel(x, y):
-                if x is self.xin and y is self.xin:
-                    dis = self._dis_in_in
-                elif x is self.xout and y is self.xin:
-                    dis = self._dis_out_in
+            def partial_kernel(x, y):
+                """y will always be self.xin, so whether we 
+                use pre-computed matrix is depend on x"""
+                if x.shape == self.xin.shape:
+                    if np.abs((x - self.xin).iloc[0, :]).sum() < 1e-10:
+                        print 'in-in'
+                        dis = self._dis_in_in.copy()
+                    else:
+                        print 're-calc!!!'
+                        dis = self.dis_func(x, y, **self.dis_kws)
+                elif x.shape == self.xout.shape:
+                    if ((x - self.xout).iloc[0, :]).sum() < 1e-10:
+                        print 'out-in'
+                        dis = self._dis_out_in.copy()
+                    else:
+                        print 're-calc!!!'
+                        dis = self.dis_func(x, y, **self.dis_kws)
                 else:
+                    print 're-calc!!!'
                     dis = self.dis_func(x, y, **self.dis_kws)
-                return self.kernel_func(dis, **self.kernel_kws)
-            self.partial_kernel = final_kernel
+                return self.kernel(dis, **self.kernel_kws)
+            self.partial_kernel = partial_kernel
+        
         elif isinstance(self.kernel, str):
             self.partial_kernel = self.kernel
         else:
