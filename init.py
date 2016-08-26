@@ -94,8 +94,15 @@ def my_distance(x, y, metric='eu', squared=False, w=None):
     """
     dim = x.shape[1]
     if w is not None:
-        x = x * w
-        y = y * w
+        if w.ndim == 1:
+            # different weights for different feature
+            x = x * w
+            y = y * w
+        elif w.ndim == 2:
+            print 'PCA!'
+            # PCA dim reduction
+            x = np.dot(x, w.T)
+            y = np.dot(y, w.T)
     if metric == 'eu':
         f = pairwise.euclidean_distances
         dim = np.sqrt(dim)
@@ -138,7 +145,7 @@ class myRgr(object):
         self._disPrep_ready = False
     
     def dataGo(self, xin, yin, xout, yout, xtest, ytest, 
-                align=True, index=None, cols=None):
+                align=True, w=None, index=None, cols=None):
         """all arguments are pd.DataFrame or pd.Series type.
 
         """
@@ -154,15 +161,28 @@ class myRgr(object):
             pass
         
         if align:
-            self.xin = self.xin.ix[self.yin.index]
-            self.xout = self.xout.ix[self.yout.index]
-            self.xtest = self.xtest.ix[self.ytest.index]
+            self.xin = self.xin.ix[self.yin.index].values
+            self.xout = self.xout.ix[self.yout.index].values
+            self.xtest = self.xtest.ix[self.ytest.index].values
         
         if not self.xin.ndim > 1: # for univariate regression
             self.xin = self.xin.reshape(-1, 1)
             self.xout = self.xout.reshape(-1, 1)
             self.xtest = self.xtest.reshape(-1, 1)
         
+        if w is not None:
+            if w.ndim == 1:
+                # different weights for different feature
+                self.xin = self.xin * w
+                self.xout = self.xout * w
+                self.xtest = self.xtest * w
+            elif w.ndim == 2:
+                print 'PCA!'
+                # PCA dim reduction
+                self.xin = np.dot(self.xin, w.T)
+                self.xout = np.dot(self.xout, w.T)
+                self.xtest = np.dot(self.xtest, w.T)
+
         self._dataGo_ready = True
 
     def disPrep(self, dis_func, **dis_kws):
@@ -207,14 +227,14 @@ class myRgr(object):
                 """y will always be self.xin, so whether we 
                 use pre-computed matrix is depend on x"""
                 if x.shape == self.xin.shape:
-                    if np.abs((x - self.xin).iloc[0, :]).sum() < 1e-10:
+                    if np.abs((x - self.xin)[0, :]).sum() < 1e-10:
                         print 'in-in'
                         dis = self._dis_in_in.copy()
                     else:
                         print 're-calc!!!'
                         dis = self.dis_func(x, y, **self.dis_kws)
                 elif x.shape == self.xout.shape:
-                    if ((x - self.xout).iloc[0, :]).sum() < 1e-10:
+                    if ((x - self.xout)[0, :]).sum() < 1e-10:
                         print 'out-in'
                         dis = self._dis_out_in.copy()
                     else:
@@ -466,7 +486,7 @@ y0 = pic.iloc[:, -1].copy()
 xin, yin, xout, yout, xtest, ytest = Splitit(x0, y0, 0.6, 0.8)
 
 #----------------- comment below when calculating
-x0_prop = PropMatrix(x0)
+#x0_prop = PropMatrix(x0)
 #----------------- comment above when calculating
 
 _xin_mean = xin.mean(axis=0)
